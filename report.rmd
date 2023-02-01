@@ -1,0 +1,481 @@
+---
+output:
+  pdf_document:
+    includes:
+      before_body: title.sty
+    number_sections: yes
+  html_document:
+    df_print: paged
+---
+
+# Introduction
+
+This project aims to predict the extent of air pollution in Beijing using PM2.5 concentration as a metric for air pollution. PM2.5 concentration refers to the concentration of fine particular matter, specifically the mass in micrograms of airborne particles with aerodynamic diameters of less than 2.5 micrometers observed in a volume of a meter cubed.
+
+In order to predict PM2.5 concentration, both meteorological variables, such as temperature and air pressure, and temporal variables, such as month and year, will be used as predictors. While the data set was taken from the University of California, Irvine, with the following source:
+
+- [https://archive.ics.uci.edu/ml/datasets/Beijing+PM2.5+Data](https://archive.ics.uci.edu/ml/datasets/Beijing+PM2.5+Data)
+
+it was an aggregate of the meteorological variables were measured at the Beijing Capital International Airport (BCIA), from [weather.nocrew.org](weather.nocrew.org), and the PM2.5 concentration measures recorded at the U.S. Embassy in Beijing; both data series ran from January 1, 2010 up to December 31, 2014. It should be noted that although the airport and embassy are 17 kilometers apart, the two locations have the same weather, according to a 2015 academic paper that used the data set in a journal published by the Royal Society, titled “Assessing Beijing's PM2.5 pollution: severity, weather impact, APEC and winter heating”, which can be found here:
+
+- [https://doi.org/10.1098/rspa.2015.0257](https://doi.org/10.1098/rspa.2015.0257).
+
+Additionally, given how weather conditions will have high variability and can confound the variables used, it was critical that the time span the data was collected in was of sufficient length and that the frequency of the observations was high enough for air pollution to be modeled accurately.
+
+# Exploratory Data Analysis
+
+```{r, include=FALSE, message=FALSE, warning=FALSE}
+# Preliminary setup to import the libraries needed
+library(readr)
+
+library(knitr)
+# making tables
+
+library(ggplot2)
+library(ggthemes)
+library(gridExtra)
+# making and displaying plots with greater aesthetic qualities
+```
+
+```{r, include=FALSE, message=FALSE, warning=FALSE}
+# Read and import data
+Pollution <- read.csv("beijingPM2.5.csv",header=TRUE)
+str(Pollution)
+```
+
+The data set has 43,824 hourly observations, and the main response variable that is to be modeled is:
+
+- `PM2.5`: The concentration of fine particulate matter composed of particles with aerodynamic diameters of less than 2.5 $\mu\text{m}$ ($\mu \text{g}/\text{m}^3$)
+
+The data set that will be used has the following temporal variables:
+
+- `Year`: Year of the observation
+- `Month`: Month of the observation
+- `Day`: Day of the observation
+- `Hour`: Hour of the observation
+
+The meteorological variables in the data set are the following:
+
+- `DEWP`: Dew point needed to achieve a relative humidity of 100% ($^\circ C$)
+- `TEMP`: Temperature ($^\circ C$)
+- `PRES`: Pressure (hPa)
+- `CBWD`: Combined wind direction
+- `LWS`: Accumulated wind speed (m/s)
+- `LS`: Accumulated hours of snow
+- `LR`: Accumulated hours of rain
+
+However, working at a daily level rather than an hourly level is more ideal since air pollution can be predicted using the day in the year as a predictor rather than the hour.
+
+```{r, include=FALSE, message=FALSE, warning=FALSE}
+# Using the provided R code to import the data and change temporal frequency to daily observations
+library("tidyverse")
+library("lubridate")
+library(dplyr)
+
+# Change TEMP and PRES as numeric
+Pollution$TEMP <- as.numeric(Pollution$TEMP)
+Pollution$PRES <- as.numeric(Pollution$PRES)
+
+# Create date-time column for hourly data
+Pollution$Date_H = with(Pollution, ymd_h(paste(Year, Month, Day, Hour, sep= ' ')))
+
+# Create date column for daily data
+Pollution$Date_D = with(Pollution, ymd(paste(Year, Month, Day)))
+Pollution[1:5,]
+
+# Build Daily data
+Pollution_Daily<-Pollution %>%
+  group_by(Date_D) %>%
+  summarise(
+  Avg_Day_PM2.5=mean(PM2.5,na.rm=TRUE),
+  Avg_Day_DEWP=mean(DEWP,na.rm=TRUE),
+  Avg_Day_TEMP=mean(TEMP,na.rm=TRUE),
+  Avg_Day_PRES=mean(PRES,na.rm=TRUE),
+  Max_Day_LWS=max(LWS,na.rm=TRUE),
+  Max_Day_LS=max(LS,na.rm=TRUE),
+  Max_Day_LR=max(LR,na.rm=TRUE),
+  Max_Day_CBWD=nth(CBWD,which.max(LWS)))
+
+# Convert Daily table to a data frame
+Pollution_Daily=as.data.frame(Pollution_Daily)
+
+# Use functions year, month and day to create Year, Month and Day Columns
+Pollution_Daily$Year = year(Pollution_Daily$Date_D)
+Pollution_Daily$Month = month(Pollution_Daily$Date_D)
+Pollution_Daily$Day = day(Pollution_Daily$Date_D)
+
+#Fix NaN values in PM2.5 and set to NAs
+Pollution_Daily$Avg_Day_PM2.5[is.nan(Pollution_Daily$Avg_Day_PM2.5)] <- NA
+
+```
+
+As a result, the daily observation data set has 1,826 observations, and the non-temporal variables have been aggregated by date into the following variables:
+
+- `Avg_Day_PM2.5`: Average PM2.5 concentration for that day ($\mu \text{g}/\text{m}^3$)
+- `Avg_Day_DEWP`: Average dew point needed to achieve a relative humidity of 100% for that day ($^\circ C$)
+- `Avg_Day_TEMP`: Average temperature for that day ($^\circ C$)
+- `Avg_Day_PRES`: Average pressure for that day (kPa)
+- `Max_Day_CBWD`: Maximum combined wind direction for that day
+- `Max_Day_LWS`: Maximum accumulated wind speed for that day (m/s)
+- `Max_Day_LS`: Maximum accumulated hours of snow for that day
+- `Max_Day_LR`: Maximum accumulated hours of rain for that day
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE, fig.cap="Daily Average PM2.5 Concentration in Beijing", out.height = '40%'}
+# Figure 1: Daily Average PM2.5 COncentration in Beijing
+ggplot(data = Pollution_Daily, aes(x = Date_D, y = Avg_Day_PM2.5)) +
+  geom_col() +
+  labs(title = "Daily Average PM2.5 Concentration in Beijing",
+       subtitle = "January 1 2010 - December 31, 2014",
+       x = "Date",
+       y = "Daily Average PM2.5 Concentration\n(micrograms / cubed meter)") +
+  theme_stata()
+```
+
+Looking at the histogram of the daily average PM2.5 concentration in Figure 1, it appears that the daily average concentration peaks at the beginning of each year, before decreasing during the middle of the year.
+
+In fact, when sorting the data set that has a daily temporacy frequency in descending average PM2.5 concentration order, the days that have the top 5 average PM2.5 concentrations are:
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE, fig.cap="Top 5 days with the highest average PM2.5 concentration"}
+top_5_days <- Pollution_Daily[order(-Pollution_Daily$Avg_Day_PM2.5),]$Date_D[1:5]
+top_5_pm2.5 <- Pollution_Daily[order(-Pollution_Daily$Avg_Day_PM2.5),]$Avg_Day_PM2.5[1:5]
+top_5 <- data.frame(top_5_days, top_5_pm2.5)
+rownames(top_5) <- NULL
+colnames(top_5) <- c("Day", "Average Daily PM2.5 Concentration  (micrograms / meters-cubed)")
+knitr::kable(top_5)
+```
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE, fig.cap="Histograms of Daily Average Meteorological Variables", out.height = '20%', fig.width = 15}
+# Figure 2: Histograms of Daily Average Meteorological Variables
+avg1 <- ggplot(data = Pollution_Daily, aes(x = Avg_Day_DEWP)) +
+          geom_histogram() +
+          labs(title = "Daily Dew Point Temperature for 100% RH (Celsius)",
+               subtitle = "January 1 2010 - December 31, 2014",
+               x = "Daily Average Dew Point Temperature to achive a RH of 100% (Celsius)") +
+          theme_stata()
+
+avg2 <- ggplot(data = Pollution_Daily, aes(x = Avg_Day_TEMP)) +
+          geom_histogram() +
+          labs(title = "Daily Average Temperature (Celsius)",
+               subtitle = "January 1 2010 - December 31, 2014",
+               x = "Daily Average Temperature (Celsius)") +
+          theme_stata()
+avg3 <- ggplot(data = Pollution_Daily, aes(x = Avg_Day_PRES)) +
+          geom_histogram() +
+          labs(title = "Daily Average Air Pressure (hPa)",
+               subtitle = "January 1 2010 - December 31, 2014",
+              x = "Daily Average Air Pressure (hPa)") +
+          theme_stata()
+grid.arrange(avg1, avg2, avg3, ncol = 3)
+```
+
+In Figure 2, the distribution of both the daily average dew point temperatures and the daily average temperatures appear to be bimodal with left skew. As for the daily average air pressure, its disribution appears to be symmetric about its median, and the distribution appears to be unimodal.
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE, fig.cap="Histograms of Daily Maximum Meteorological Variables", out.height = '20%', fig.width = 15}
+# Figure 3: Histograms of Daily Maximum Meteorological Variables
+max1 <- ggplot(data = Pollution_Daily, aes(x = Max_Day_LWS)) +
+          geom_histogram() +
+          labs(title = "Daily Maximum Accumulated Wind Speed (m/s)",
+               subtitle = "January 1 2010 - December 31, 2014",
+               x = "Daily Maximum Accumulated Wind Speed (m/s)") +
+          theme_stata()
+max2 <- ggplot(data = Pollution_Daily, aes(x = Max_Day_LS)) +
+          geom_histogram(binwidth = 1) +
+          labs(title = "Daily Maximum Accumulated Hours of Snow",
+               subtitle = "January 1 2010 - December 31, 2014",
+               x = "Daily Maximum Accumulated Hours of Snow") +
+          theme_stata()
+max3 <- ggplot(data = Pollution_Daily, aes(x = Max_Day_LR)) +
+          geom_histogram(binwidth = 1) +
+          labs(title = "Daily Maximum Accumulated Hours of Rain",
+               subtitle = "January 1 2010 - December 31, 2014",
+               x = "Daily Maximum Accumulated Hours of Rain") +
+          theme_stata()
+grid.arrange(max1, max2, max3, ncol = 3)
+```
+
+Lastly in Figure 3, since the distributions for the daily accumulated wind speed, accumulated hours of snow, and accumulated hours of rain appear to have heavy right skew, using a log transformation or inverse transformation on these variables might prove to be fruitful when fitting model later on.
+
+# Methods
+
+Before making the preliminary model, we will separate the data set which had a daily temporal frequency into training and testing sets. We will randomly select $\dfrac{1}{10}$ of the data set without replacement to be the testing set, and the remaining $\dfrac{9}{10}$ of the data set will be the training set.
+
+```{r, include=FALSE, message=FALSE, warning=FALSE}
+# Randomly select 1/10 of the data set to use testing data
+# Use the remaining 9/10 of the data as training data
+set.seed(425)
+testing_indices <- sample(x = (1:nrow(Pollution_Daily)),
+                          size = round(nrow(Pollution_Daily) / 10, 0),
+                          replace = FALSE)
+testing_data <- Pollution_Daily[testing_indices, ]
+training_data <- Pollution_Daily[- testing_indices, ]
+```
+
+## Model Fitting
+
+The first preliminary model I made was a multiple linear regression model that included all of the meteorological predictors along with the date that each observation was recorded.
+
+```{r, include=FALSE, message=FALSE, warning=FALSE}
+model_mlr <- lm(Avg_Day_PM2.5 ~ . - Year - Month - Day,
+                data = training_data)
+```
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE, fig.cap="MLR model diagnostic plots", out.height = '25%'}
+# Figure 4: MLR model diagnostic plots
+par(mfrow = c(2, 2))
+plot(model_mlr)
+```
+
+Based on the Residuals vs Fitted plot in the above figure, it is apparent that the assumption of the residuals have constant variance has been violated as the spread of the residuals appears to increase as the magnitude of the fitted values increase. This is also apparent in the Scale-Location plot where the spread of the residuals begins to increase dramatically when fittd values are greater than 50.
+
+Based on the Normal-QQ plot, there also appears to be violations of the assumption of the residuals following a normal distribution as there are deviations from the 1:1 line when the theoretical quantiles are greater than 1.5.
+
+Based on the Residuals vs Leverage plot, there does not appear to be any highly influential points as there were not any observations that were in the threshold where the Cook's distance was at least 1.
+
+Next, I used the following formal tests to test for the respective model assumptions:
+
+- Breusch-Pagan test for homoscedasticity
+- Shapiro-Wilks test for the residuals following a normal distribution
+- Durbin-Watson test for non-correlated errors
+
+```{r, echo = FALSE, message = FALSE, warning = FALSE, fig.cap = "Formal test p-values"}
+library(lmtest)
+mlr_test_pvalues <- c(bptest(model_mlr)$p.value[[1]],
+                      shapiro.test(residuals(model_mlr))$p.value,
+                      dwtest(model_mlr)$p.value)
+formal_tests <-  c("Breusch-Pagan", "Shapiro-Wilks", "Durbin-Watson")
+mlr_formal_tests <- data.frame(formal_tests,
+                               mlr_test_pvalues)
+colnames(mlr_formal_tests) <- c("Formal test", "p-value")
+knitr::kable(mlr_formal_tests)
+```
+
+As the p-value of the three tests are all less than 0.05, all three assumptions of the residuals having constant variance, the residuals following a normal distribution, and non-correlated errors, are violated.
+
+Next, I checked the multiple linear regression model for unusual observations.
+
+```{r, include=FALSE, message=FALSE, warning=FALSE}
+mlr_leverage <- influence(model_mlr)$hat
+length(mlr_leverage[mlr_leverage > 2 * length(model_mlr$coefficients) / nrow(training_data)])
+```
+
+When checking for high-leverage points, there were a total of `r length(mlr_leverage[mlr_leverage > 2 * length(model_mlr$coefficients) / nrow(training_data)])` high leverage points, meaning there were `r length(mlr_leverage[mlr_leverage > 2 * length(model_mlr$coefficients) / nrow(training_data)])` observations that were far away from the center of the data.
+
+```{r, include=FALSE, message=FALSE, warning=FALSE}
+jack <- rstudent(model_mlr)
+outlier_threshold <- abs(qt(0.05 / (2 * nrow(training_data)),
+                         nrow(training_data) - length(model_mlr$coefficients) - 1))
+sorted_jack <- sort(abs(jack), decreasing = TRUE)
+length(sorted_jack[sorted_jack >= outlier_threshold])
+```
+
+As for outliers, there were `r length(sorted_jack[sorted_jack >= outlier_threshold])` outliers according to outlier test run with a Bonferroni correction which had a critical value of $\dfrac{0.05}{2*n}$, with $n=$ `r nrow(training_data)`.
+
+```{r, include=FALSE, message=FALSE, warning=FALSE}
+mlr_cooks_dist <- cooks.distance(model_mlr)
+length(mlr_cooks_dist[mlr_cooks_dist >= 1])
+```
+
+Using the Cook's distance of the observations to check for highly influential points, there were not any that had a Cook's distance of at least 1. Hence, there were not any highly influential points.
+
+Due to the presence of `r length(sorted_jack[sorted_jack >= outlier_threshold])` outliers according to outlier test, I made the decision to make a copy of the training set that omitted those observations.
+
+```{r, include=FALSE, message=FALSE, warning=FALSE}
+abs(jack) >= outlier_threshold
+training_data_no_outliers <- training_data[- (abs(jack) >= outlier_threshold),]
+```
+
+\newpage
+
+As the multiple linear regression model had violations in the assumptions for homoscedasticity in the residuals, residuals following a normal distribution, and errors not being correlated, I tried to use a Boxcox transformation to try to deal with the violation with the normality assumption.
+
+```{r, echo = FALSE, message = FALSE, warning = FALSE, fig.cap = "MLR Model Boxcox Plot", out.height = '20%'}
+# Figure 5: MLR Model Boxcox Plot
+library(MASS)
+boxcox(model_mlr, plotit = TRUE)
+```
+
+Since Figure 4 displays the log-likeihood being at its maximum near 0, I chose to only transform the reponse variable, the daily average PM2.5 concentration, using a log transformation
+
+```{r, include=FALSE, message=FALSE, warning=FALSE}
+quick_diag <- function(model) {
+  par(mfrow = c(2, 2))
+  plot(model)
+  
+  bptest(model)$p.value[[1]]
+  shapiro.test(residuals(model))$p.value
+  dwtest(model)$p.value
+}
+```
+
+```{r, include=FALSE, message=FALSE, warning=FALSE}
+model_log <- lm(log(Avg_Day_PM2.5) ~ . - Year - Month - Day,
+                data = training_data_no_outliers)
+```
+
+```{r, echo = FALSE, message = FALSE, warning = FALSE, fig.cap = "Log Model Diagnostic Plots", out.height='25%'}
+# Figure 6: Log Model Diagnostic Plots
+par(mfrow = c(2, 2))
+plot(model_log)
+```
+
+Looking at Figure 6's Residuals vs Fitted plot, it appears does not appear to be any issues with non-linearity in the recently made log model.
+
+There also does not appear to be any violations of the normality assumption either, as there does not appear to be any deviation from the 1:1 line in the Normal Q-Q plot.
+
+There apperas to be slight issues variance of the residuals in the Scale-Location plot as the spread appears to increase when fitted values approach 4, but start to decrease when increasing greater than 4.
+
+As for the Residuals vs Leverage plot, there does not appear to be any observations that are highly influential as there are not any points in regions where the Cook's distance is at least 1.
+
+When running the three formal tests that were I also ran on the first multiple regression model, the three tests produced the following p-values:
+
+```{r, echo = FALSE, message = FALSE, warning = FALSE, fig.cap = "Formal test p-values"}
+log_test_pvalues <- c(bptest(model_log)$p.value[[1]],
+                      shapiro.test(residuals(model_log))$p.value,
+                      dwtest(model_log)$p.value)
+formal_tests <-  c("Breusch-Pagan", "Shapiro-Wilks", "Durbin-Watson")
+log_formal_tests <- data.frame(formal_tests,
+                               log_test_pvalues)
+colnames(log_formal_tests) <- c("Formal test", "p-value")
+knitr::kable(log_formal_tests)
+```
+
+While there appears to be a slight improvement in the normality assumption, as the p-value of the Shapiro-Wilks test on the multiple linear regression model was substantially closer to zero, there does not appear to be any improvement in the constant variance assumption, nor the non-correlated errors assumption for the log model.
+
+As I previously observed how the variables for the maximum daily accumulated wind speed, maximum daily hours of accumulated snow, and maximum daily hours of accumulated rain had heavy right skew, I tried using the log transformations on those variables. Since the maximum daily accumulated hours of snow and the maximum daily accumulated hours of rain had minimums of zero, I added one to both variables in the observations in the data set.
+
+```{r, include=FALSE, message=FALSE, warning=FALSE}
+model_log2 <- lm(log(Avg_Day_PM2.5) ~ . - Year - Month - Day - Max_Day_LWS - Max_Day_LS - Max_Day_LR + log(Max_Day_LWS) + log(Max_Day_LR + 1) + log(Max_Day_LS + 1),
+               data = training_data_no_outliers)
+```
+
+```{r, echo = FALSE, message = FALSE, warning = FALSE, fig.cap = "Second Log Model Diagnostic Plots", out.height='25%'}
+# Figure 7: Second Log Model Diagnostic Plots
+par(mfrow = c(2, 2))
+plot(model_log2)
+```
+
+Now, for Figure 7, the same things said for the first log model can be said for the second model when viewing the second model's diagnostic plots, where there are not any indications of non-linearity based on the Residuals vs Fitted plot, there are not any deviations from the 1:1 line in the Normal Q-Q plot,  there are some indications of the variance of the residuals changing when fitted values increase, and there are not any unusual observations that would be considered highly influence in the Residuals vs Leverage plot.
+
+Looking at the p-values produced from the formal tests, they are as follows:
+
+```{r, echo = FALSE, message = FALSE, warning = FALSE, fig.cap = "Formal test p-values"}
+log2_test_pvalues <- c(bptest(model_log2)$p.value[[1]],
+                      shapiro.test(residuals(model_log2))$p.value,
+                      dwtest(model_log2)$p.value)
+formal_tests <-  c("Breusch-Pagan", "Shapiro-Wilks", "Durbin-Watson")
+log2_formal_tests <- data.frame(formal_tests,
+                               log2_test_pvalues)
+colnames(log2_formal_tests) <- c("Formal test", "p-value")
+knitr::kable(log2_formal_tests)
+```
+
+While there appeared to be minimal improvements in the normality assumption, the assumptions of the residuals having constant variance and non-correlated errors do not appear to have any improvements.
+
+I then tried including the interaction between the maximum combined wind direction and the maximum accumulated wind speed, as both variables are related to wind.
+
+```{r, include=FALSE, message=FALSE, warning=FALSE}
+model_log_int <- lm(log(Avg_Day_PM2.5) ~ . - Year - Month - Day - Max_Day_LWS - Max_Day_LS - Max_Day_LR + log(Max_Day_LWS) + log(Max_Day_LR + 1) + log(Max_Day_LS + 1) + Max_Day_CBWD * Max_Day_LWS,
+                 data = training_data_no_outliers)
+```
+
+```{r, echo = FALSE, message = FALSE, warning = FALSE, fig.cap = "Second Log Model with Interaction Diagnostic Plots", out.height='25%'}
+# Figure 8: Second Log Model with Interaction Diagnostic Plots
+par(mfrow = c(2, 2))
+plot(model_log_int)
+```
+
+In Figure 8, there does not appear to be any issues with the model assumptions when viewing the interaction model's diagnostic plots
+
+```{r, echo = FALSE, message = FALSE, warning = FALSE, fig.cap = "Formal test p-values"}
+log_int_test_pvalues <- c(bptest(model_log_int)$p.value[[1]],
+                      shapiro.test(residuals(model_log_int))$p.value,
+                      dwtest(model_log_int)$p.value)
+formal_tests <-  c("Breusch-Pagan", "Shapiro-Wilks", "Durbin-Watson")
+log_int_formal_tests <- data.frame(formal_tests,
+                                   log_int_test_pvalues)
+colnames(log_int_formal_tests) <- c("Formal test", "p-value")
+knitr::kable(log_int_formal_tests)
+```
+
+While there did not appear to be any improvements based off the Bruesh-Pagan and Durbin-Watson test still returning p-values that are very close to zero, the Shapiro-Wilks test did not reject the null hypothesis of normally distributed residuals.
+
+As I did not consider there to be other models to attempt, I began to using backwards variable selection on the interaction model, using the BIC as the selection criterion.
+
+```{r, include=FALSE, message=FALSE, warning=FALSE}
+bic_model <- step(model_log_int, direction = "backward", trace = FALSE, k = log(nrow(training_data_no_outliers)))
+```
+
+From backwards variable selection, I was able to generate the following model:
+$$\begin{matrix} \log(y_{\text{Avg. Daily PM2.5}}) = \beta_0 + \beta_1x_\text{Avg. Dew Point}+ \beta_2x_\text{Avg. Day Temp} + \beta_3x_\text{Avg. Day Pressure} + \\
++\beta_4 d_\text{Max Day CBWD, NE}+\beta_5 d_\text{Max Day CBWD, NW} + \beta_6 d_\text{Max Day CBWD, SE} +\\
++\beta_7 \log(x_\text{Max Day Wind Spd})+\beta_8\log(x_\text{Max Day Rain})
++ \beta_9\log(x_\text{Max Day Snow}) + \\ + \beta_{10} x_\text{Max Day Wind Spd} +
+\beta_{11}\left( x_\text{Max Day Wind Spd}, d_\text{Max Day CBWD, NE}\right) + \\ + \beta_{12} \left(x_\text{Max Day Wind Spd}, d_\text{Max Day CBWD, NW}\right)
++ \beta_{13}\left(x_\text{Max Day Wind Spd}, d_\text{Max Day CBWD, SE}\right) \end{matrix}$$
+
+The coefficients for the predictors are as follows:
+
+```{r, echo = FALSE, message = FALSE, warning = FALSE, fig.cap = "BIC model coefficients"}
+betas <- (0:13)
+bic_coefficients <- data.frame(betas, bic_model$coefficients)
+rownames(bic_coefficients) <- NULL
+knitr::kable(bic_coefficients, col.names = c("$\\beta_i$", "Value"))
+```
+
+Next, I checked the model diagnostics for the BIC model.
+
+```{r, echo = FALSE, message = FALSE, warning = FALSE, fig.cap = "BIC Model Diagnostic Plots", out.height='25%'}
+par(mfrow = c(2, 2))
+plot(bic_model)
+```
+
+Look at Figure 9's diagnostic plots, the Residuals vs Fitted plot does not show any indication of non-linearity in the model. As for the Normal Q-Q plot, there does not appear to any deviation from the 1:1 line, which would mean the normality assumption would not appear to be violated. As for the Scale-Location plot, the same issue of the variance of the residuals increasing before decreasing is present. As for the Residuals vs Leverage plot, there does not appear to be any highly influential points as all of the points appear to be within the interval where the Cook's distance is less than 1.
+
+```{r, echo = FALSE, message = FALSE, warning = FALSE, fig.cap = "Formal test p-values"}
+bic_test_pvalues <- c(bptest(bic_model)$p.value[[1]],
+                      shapiro.test(residuals(bic_model))$p.value,
+                      dwtest(bic_model)$p.value)
+formal_tests <-  c("Breusch-Pagan", "Shapiro-Wilks", "Durbin-Watson")
+bic_formal_tests <- data.frame(formal_tests,
+                               bic_test_pvalues)
+colnames(bic_formal_tests) <- c("Formal test", "p-value")
+knitr::kable(bic_formal_tests)
+```
+
+Again, while the normality assumption does not appear to be violated since the Shapiro-Wilks test did not reject the null hypothesis of normality, the Breush-Pagan and Durbin-Watson test still reject their null hypotheses, meaning the BIC model violates the assumption of constant variance among the residuals and non-correlated errors.
+
+## Prediction
+
+Next, using the most optimal model from the previous part, which was the interaction log model which had backwards BIC variable selection, I will predict the average daily PM2.5 concentration using the data from the testing set as predictors.
+
+In order to gauge how accurate my most optimal model is, I will use Root Mean Square Error as the metric to report on the model's performance, while removing any observations that do not have a recorded average daily PM2.5 concentration when computing the mean.
+
+```{r, include=FALSE, message=FALSE, warning=FALSE}
+predicted_PM2.5 <- exp(predict(bic_model, newdata = testing_data))
+sqrt((mean(testing_data$Avg_Day_PM2.5 - predicted_PM2.5, na.rm = TRUE)) ^ 2)
+```
+
+The RMSE value was `r sqrt((mean(testing_data$Avg_Day_PM2.5 - predicted_PM2.5, na.rm = TRUE)) ^ 2)`, which would mean that on average, the prediction made by my optimal model would be `r sqrt((mean(testing_data$Avg_Day_PM2.5 - predicted_PM2.5, na.rm = TRUE)) ^ 2)` micrograms / cubic meter away from the actual observed daily average PM2.5 concentration.
+
+# Discussion of Results and Conclusions
+
+Using the optimal model I produced at the end, which was the variable selected log model with interaction terms, using BIC as the selection criteron, my predictions of the average daily PM2.5 concentration of the testing data on average were off by `r sqrt((mean(testing_data$Avg_Day_PM2.5 - predicted_PM2.5, na.rm = TRUE)) ^ 2)` micrograms / cubic meter away. Additionally, the BIC model's Adjusted $R^2$ value of `r summary(bic_model)$adj.r.squared` means that the `r summary(bic_model)$adj.r.squared * 100` percent of the variance in the logged daily average PM2.5 concentration was explained by the BIC model, when accounting for the addition of additional predictors to the model. While this appears to be relatively accurate, considering how the standard deviation of the average daily PM2.5 reading of `r sqrt(var(testing_data$Avg_Day_PM2.5, na.rm = TRUE))` micrograms per cubic meter, this model failed to have the following assumptions satisfied:
+
+- Constant variance among the residuals
+- Non-correlated errors
+
+As the observations are from a time series data set, the autocorrelation of the errors was to be expected, and an approach that may help in resolving this would be to use Generalized Linear Regression to make a model.
+
+When it comes to applying the model in the real world, we can look at the magnitudes of the coefficients in the BIC model; it appears that a combined daily maximum wind direction in the Northeast direction would contribute the most to observing a smaller average daily PM2.5 concentration. Additionally, as for the predictor that would contribute the most to observing a bigger average daily PM2.5 concentration, that would be the average daily dew point temperature needed to reach a relative humidity of 100%.
+
+*Closing thoughts:*
+
+- The final BIC model would not be ideal for interpretability, given how the response variable, the average daily PM2.5 concentration, has a logarithmic scale, and how there are multiple interaction terms as predictors, along with the predictors like the maximum daily accumulated hours of rain, being on a logarithmic scale as well.
+- As the data was collected from an observational study rather than an experiment, the model loses much of its utility of the goal was to find ways to reduce the amount of PM2.5 concentration in the air. This is further compounded with the fact that many of the predictor variables are not things humans can control directly, like wind speed and air pressure.
+- As this model fails to have the assumptions of the residuals having constant variance and the errors not being correlated, the utility from the model will also begin to diminish when attempting to extrapolate the amount of PM2.5 concentration using extreme values for predictors.
+
+# Acknowledgements
+
+I thank Burak Ogan Mancarci (University of British Columbia) for the assistance in the formatting of the report and the title page. I adapted the formatting used in the RMarkdown file and the `title.sty` file of their thesis proposal, which can be found at:
+
+- [https://github.com/oganm/ThesisProposal](https://github.com/oganm/ThesisProposal)
